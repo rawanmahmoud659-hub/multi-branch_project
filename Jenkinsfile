@@ -2,48 +2,40 @@ pipeline {
     agent any
 
     environment {
-        REPO_URL = 'https://github.com/MohamedMagdy840/jenkins-repo.git'
-        REGISTRY = 'docker.io'
+        APP_BASE_NAME = 'app-hello-nti'
+        DOCKER_REGISTRY = 'docker.io'
     }
 
     stages {
-        stage('Getting Repo Files') {
-            steps {
-                git branch: "${env.BRANCH_NAME ?: 'main'}",
-                    credentialsId: 'github',
-                    url: "${REPO_URL}"
-            }
-        }
 
-        stage('Detect Branch and Configure App') {
+        stage('Configure Branch') {
             steps {
                 script {
-                    // Detect the current Git branch
-                    env.GIT_BRANCH_NAME = sh(
-                        script: 'git rev-parse --abbrev-ref HEAD',
-                        returnStdout: true
-                    ).trim()
+                    // Jenkins Multibranch Pipeline provides BRANCH_NAME
+                    env.GIT_BRANCH_NAME = env.BRANCH_NAME
 
-                    // Make the branch name safe for Docker names and tags
                     env.BRANCH_SLUG = env.GIT_BRANCH_NAME
                         .toLowerCase()
                         .replaceAll('[^a-z0-9_.-]', '-')
 
-                    // Change the app name based on the branch
+                    // Different application name for each branch
                     if (env.GIT_BRANCH_NAME == 'main') {
-                        env.APP_NAME = 'new-app'
+                        env.APP_NAME = env.APP_BASE_NAME
                     } else if (env.GIT_BRANCH_NAME == 'dev') {
-                        env.APP_NAME = 'new-app-dev'
+                        env.APP_NAME = "${env.APP_BASE_NAME}-dev"
+                    } else if (env.GIT_BRANCH_NAME == 'stg') {
+                        env.APP_NAME = "${env.APP_BASE_NAME}-stg"
                     } else {
-                        env.APP_NAME = "new-app-${env.BRANCH_SLUG}"
+                        env.APP_NAME =
+                            "${env.APP_BASE_NAME}-${env.BRANCH_SLUG}"
                     }
 
                     env.IMAGE_NAME = "${env.APP_NAME}:${env.BUILD_NUMBER}"
                     env.CONTAINER_NAME =
                         "${env.APP_NAME}-${env.BRANCH_SLUG}-${env.BUILD_NUMBER}"
 
-                    echo "Git branch: ${env.GIT_BRANCH_NAME}"
-                    echo "Application: ${env.APP_NAME}"
+                    echo "Branch: ${env.GIT_BRANCH_NAME}"
+                    echo "App: ${env.APP_NAME}"
                     echo "Image: ${env.IMAGE_NAME}"
                     echo "Container: ${env.CONTAINER_NAME}"
                 }
@@ -85,15 +77,16 @@ pipeline {
             }
         }
 
-        stage('Find Available Port and Run Container') {
+        stage('Run Container on Available Port') {
             steps {
                 script {
-                    // Remove this exact container if it already exists
+                    // Remove a previous container with the same name, if any
                     sh '''
                         docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
                     '''
 
-                    // Docker automatically allocates a host port
+                    // Publish container port 5000 on an automatically
+                    // allocated available host port
                     sh '''
                         docker run -d \
                             -p 5000 \
@@ -101,7 +94,7 @@ pipeline {
                             "$IMAGE_NAME"
                     '''
 
-                    // Display the assigned host port
+                    // Discover the port assigned by Docker
                     env.HOST_PORT = sh(
                         script: """
                             docker port '${env.CONTAINER_NAME}' 5000/tcp |
@@ -111,17 +104,21 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
+                    echo "Container started successfully"
+                    echo "Branch: ${env.GIT_BRANCH_NAME}"
                     echo "Container: ${env.CONTAINER_NAME}"
-                    echo "Application URL: http://localhost:${env.HOST_PORT}"
+                    echo "Host port: ${env.HOST_PORT}"
+                    echo "App URL: http://localhost:${env.HOST_PORT}"
                 }
             }
         }
 
-        stage('Verify Container') {
+        stage('Verify') {
             steps {
                 sh '''
                     docker ps --filter "name=$CONTAINER_NAME"
                     docker port "$CONTAINER_NAME"
+                    docker logs --tail 20 "$CONTAINER_NAME"
                 '''
             }
         }
